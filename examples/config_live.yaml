@@ -1,0 +1,30 @@
+account: LU1832
+theme: dark           # white, dark
+host: '127.0.0.1'
+port: 7497
+client_id: 0
+#-------------- active strategies -------------#
+strategy:
+  MovingAverageCrossStrategy:
+    params:
+      short_window: 20
+      long_window: 80
+    symbols:
+      - SPY STK SMART
+      - AAPL STK SMART
+      - AMZN STK SMART
+  BuyAndHoldStrategy:
+    params:
+      ticks: 5
+    symbols:
+      - SPY STK SMART
+      - AMZN STK SMART
+      - MSFT STK SMART
+  OrderPerIntervalStrategy:
+    path: 'd:/workspace/quanttrading2/examples/order_per_interval_strategy.py'
+    params:
+      tick_trigger_threshold: 50
+      tick_trigger_threshold2: 100
+    symbols:
+      - IC1802
+      - IF1802
