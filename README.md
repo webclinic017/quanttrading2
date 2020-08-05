@@ -2,7 +2,15 @@
 
 Backtest and live trading in 100% pure Python.
 
+### Backtest
+
+[Backtests Blog](https://letianzj.github.io/quanttrading-backtest.html)
+
 [Backtests examples](https://github.com/letianzj/QuantResearch/tree/master/backtest)
+
+[Param search example](https://github.com/letianzj/QuantResearch/blob/master/backtest/ma_double_cross.py)
+
+### Live trading
 
 ```python
 # install ib and ib api
@@ -18,6 +26,8 @@ python live_engine.py
 ```
 
 There exists [QuantTrading(1)](https://github.com/letianzj/QuantTrading) in C#. This one with suffix 2 is written in Python.
+
+![gui](https://github.com/letianzj/quanttrading2/blob/master/examples/gui.png)
 
 **DISCLAIMER**
 Open source, free to use, free to contribute, use at own risk. No promise of future profits nor responsibility of future loses.

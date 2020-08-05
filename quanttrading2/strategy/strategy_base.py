@@ -41,9 +41,10 @@ class StrategyBase(metaclass=ABCMeta):
                 except:
                     pass
 
-    def on_init(self, broker, data_board=None):
+    def on_init(self, broker, data_board=None, position_manager=None):
         self.broker = broker
         self._data_board = data_board
+        self._position_manager = position_manager
         self.initialized = True
 
     def on_start(self):
@@ -58,7 +59,7 @@ class StrategyBase(metaclass=ABCMeta):
         """
         pass
 
-    def on_order_status(self):
+    def on_order_status(self, order_event):
         """
         on order acknowledged
         :return:
@@ -73,7 +74,7 @@ class StrategyBase(metaclass=ABCMeta):
         """
         pass
 
-    def on_fill(self):
+    def on_fill(self, fill_event):
         """
         on order filled
         :return:
@@ -90,7 +91,7 @@ class StrategyBase(metaclass=ABCMeta):
         :return:
         """
         o.source = self.id         # identify source
-        o.create_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')
+        o.create_time = datetime.now().strftime('%H:%M:%S.%f')
         if (self.active):
             self.broker.place_order(o)
 

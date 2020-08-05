@@ -43,18 +43,21 @@ class InteractiveBrokers(BrokerageBase):
         self.event_engine = event_engine          # save events to event queue
         self.api = IBApi(self)
         self.account = account
-        self.contract_detail_request_contract_dict = {}
-        self.contract_detail_request_symbol_dict = {}
-        self.market_data_subscription_dict = {}
-        self.market_data_subscription_reverse_dict = {}
-        self.market_data_tick_dict = {}          # to combine tickprice and ticksize
+        self.contract_detail_request_contract_dict = {}        # reqid ==> contract
+        self.contract_detail_request_symbol_dict = {}          # reqid ==> symbol
+        self.sym_contract_dict = {}                            # sym ==> contract
+        self.contract_symbol_dict = {}                           # conId ==> symbol
+        self.market_data_subscription_dict = {}               # reqId ==> sym
+        self.market_data_subscription_reverse_dict = {}       # sym ==> reqId
+        self.market_data_tick_dict = {}          # reqid ==> tick_event; to combine tickprice and ticksize
         self.market_depth_subscription_dict = {}
         self.market_depth_subscription_reverse_dict = {}
-        self.market_depth_tick_dict = {}  # to combine tickprice and ticksize
+        self.market_depth_tick_dict = {}        # to combine tickprice and ticksize
         self.hist_data_request_dict = {}
-        self.order_dict = {}
+        self.order_dict = {}                            # order id ==> order_event
         self.account_summary_reqid = -1
         self.account_summary = AccountEvent()
+        self.account_summary.brokerage = 'IB'
         self.clientid = 0
         self.reqid = 0
         self.orderid = 0
@@ -86,7 +89,7 @@ class InteractiveBrokers(BrokerageBase):
         pass
 
     def next_order_id(self):
-        pass
+        return self.orderid
 
     def place_order(self, order_event):
         if not self.api.connected:
@@ -103,8 +106,12 @@ class InteractiveBrokers(BrokerageBase):
             return
 
         order_event.order_id = self.orderid
-        self.api.placeOrder(self.orderid, ib_contract, ib_order)
+        order_event.account = self.account
+        order_event.timestamp = datetime.now().strftime("%H:%M:%S.%f")
+        order_event.order_status = OrderStatus.NEWBORN
         self.order_dict[self.orderid] = order_event
+        self.event_engine.put(copy(order_event))
+        self.api.placeOrder(self.orderid, ib_contract, ib_order)
         self.orderid += 1
 
     def cancel_order(self, order_id):
@@ -113,6 +120,9 @@ class InteractiveBrokers(BrokerageBase):
 
         if not order_id in self.order_dict.keys():
             _logger.error(f'Order to cancel not found. order id {order_id}')
+            return
+
+        self.order_dict[order_id].cancel_time = datetime.now().strftime("%H:%M:%S.%f")
 
         self.api.cancelOrder(order_id)
 
@@ -123,8 +133,9 @@ class InteractiveBrokers(BrokerageBase):
         if not self.api.connected:
             return
 
-        if sym in self.market_data_subscription_reverse_dict.keys():
-            return
+        # it's not going to re-subscribe, because we only call subscribe_market_datas
+        # if sym in self.market_data_subscription_reverse_dict.keys():
+        #     return
 
         contract = InteractiveBrokers.symbol_to_contract(sym)
         if not contract:
@@ -142,6 +153,11 @@ class InteractiveBrokers(BrokerageBase):
         self.market_data_subscription_reverse_dict[sym] = self.reqid
         self.market_data_tick_dict[self.reqid] = tick_event
         self.reqid += 1
+
+    def subscribe_market_datas(self):
+        syms = list(self.market_data_subscription_reverse_dict.keys())
+        for sym in syms:
+            self.subscribe_market_data(sym)
 
     def unsubscribe_market_data(self, sym):
         if not self.api.connected:
@@ -227,7 +243,7 @@ class InteractiveBrokers(BrokerageBase):
         self.api.setServerLogLevel(level)
 
     def log(self, msg):
-        timestamp = datetime.now().strftime("%H:%M:%S")
+        timestamp = datetime.now().strftime("%H:%M:%S.%f")
         log_event = LogEvent()
         log_event.timestamp = timestamp
         log_event.content = msg
@@ -271,7 +287,9 @@ class InteractiveBrokers(BrokerageBase):
         elif ib_contract.secType == 'CASH':
             full_symbol = ' '.join([ib_contract.symol+ib_contract.currency, 'CASH', ib_contract.exchange])
         elif ib_contract.secType == 'FUT':
-            full_symbol = ' '.join([ib_contract.localSymbol, 'FUT', ib_contract.exchange])
+            full_symbol = ' '.join([ib_contract.localSymbol, 'FUT',
+                                    ib_contract.primaryExchange if ib_contract.primaryExchange != ''
+                                    else ib_contract.exchange])
 
         return full_symbol
 
@@ -335,7 +353,6 @@ class IBApi(EWrapper, EClient):
 
         self.nKeybInt = 0
         self.connected = False
-        self.nextValidOrderId = None
         self.globalCancelOnly = False
         self.simplePlaceOid = None
 
@@ -367,6 +384,9 @@ class IBApi(EWrapper, EClient):
         self.broker.log(msg)
         self.broker.orderid = orderId
 
+        # we can start now
+        self.broker.subscribe_market_datas()
+
     def error(self, reqId: TickerId, errorCode: int, errorString: str):
         super().error(reqId, errorCode, errorString)
         msg = f'Error. id: {reqId}, Code: {errorCode}, Msg: {errorString}'
@@ -389,22 +409,27 @@ class IBApi(EWrapper, EClient):
         _logger.info(msg)
         self.broker.log(msg)
 
-        order_event = InteractiveBrokers.ib_order_to_order(order)
-        order_event.order_id = orderId
+        if orderId in self.broker.order_dict.keys():
+            order_event = self.broker.order_dict[orderId]
+        else:     # not placed by algo
+            order_event = InteractiveBrokers.ib_order_to_order(order)
+            order_event.order_id = orderId
+            order_event.full_symbol = InteractiveBrokers.contract_to_symbol(contract)
+            order_event.account = self.broker.account
+            order_event.order_time = datetime.now().strftime('%H:%M:%S.%f')
+            order_event.source = -1            # unrecognized source
+            self.broker.order_dict[orderId] = order_event
+
         if orderState.status == 'Submitted':
             order_event.order_status = OrderStatus.SUBMITTED
         elif orderState.status == 'Filled':
             order_event.order_status = OrderStatus.FILLED
         elif orderState.status == 'PreSubmitted':
             order_event.order_status = OrderStatus.PENDING_SUBMIT
+        elif orderState.status == 'Cancelled':
+            order_event.order_status = OrderStatus.CANCELED
         else:
             order_event.order_status = OrderStatus.UNKNOWN
-
-        if orderId in self.broker.order_dict.keys():
-            order_event.full_symbol = self.broker.order_dict[orderId].full_symbol
-        else:     # not placed by algo
-            order_event.full_symbol = InteractiveBrokers.contract_to_symbol(contract)
-            self.broker.order_dict[orderId] = order_event.full_symbol
 
         self.broker.event_engine.put(copy(order_event))
 
@@ -425,17 +450,35 @@ class IBApi(EWrapper, EClient):
         _logger.info(msg)
         self.broker.log(msg)
 
-        order_event = self.broker.order_dict.get(OrderId, None)
-        if not order_event is None:
-            if status == 'Submitted':
-                order_event.order_status = OrderStatus.SUBMITTED
-            elif status == 'Filled':
-                order_event.order_status = OrderStatus.FILLED
-            elif status == 'PreSubmitted':
-                order_event.order_status = OrderStatus.PENDING_SUBMIT
-            else:
-                order_event.order_status = OrderStatus.UNKNOWN
+        order_event = self.broker.order_dict.get(orderId, None)
+        if order_event is None:
+            msg = f'OrderStatus: Unable to find order {orderId}'
+            _logger.error(msg)
+            self.broker.log(msg)
+            order_event = OrderEvent()
+            order_event.order_id = orderId
+            order_event.account = self.broker.account
+            order_event.order_size = filled + remaining
             order_event.fill_size = filled
+            self.order_type = OrderType.UNKNOWN
+            self.order_status = OrderStatus.UNKNOWN
+            order_event.order_time = datetime.now().strftime('%H:%M:%S.%f')
+            order_event.source = -1            # unrecognized source
+            self.broker.order_dict[orderId] = order_event
+
+        if status == 'Submitted':
+            order_event.order_status = OrderStatus.SUBMITTED
+        elif status == 'Filled':
+            order_event.order_status = OrderStatus.FILLED
+        elif status == 'PreSubmitted':
+            order_event.order_status = OrderStatus.PENDING_SUBMIT
+        elif status == 'Cancelled':
+            order_event.order_status = OrderStatus.CANCELED
+            order_event.fill_size = filled         # remaining = order_size - fill_size
+            order_event.cancel_time = datetime.now().strftime("%H:%M:%S.%f")
+        else:
+            order_event.order_status = OrderStatus.UNKNOWN
+        order_event.fill_size = filled
 
         self.broker.event_engine.put(copy(order_event))
 
@@ -464,6 +507,8 @@ class IBApi(EWrapper, EClient):
         super().updateAccountValue(key, val, currency, accountName)
         msg = f'UpdateAccountValue. Key: {key}, Value: {val},  Currency: {currency}, AccountName: {accountName}'
         _logger.info(msg)
+
+        self.broker .account_summary.timestamp = datetime.now().strftime("%H:%M:%S.%f")
 
         if key == 'NetLiquidationByCurrency' and currency == 'USD':
             self.broker.account_summary.balance = float(val)
@@ -503,6 +548,7 @@ class IBApi(EWrapper, EClient):
         position_event.average_cost = averageCost / multiplier
         position_event.realized_pnl = realizedPNL
         position_event.unrealized_pnl = unrealizedPNL
+        position_event.timestamp = datetime.now().strftime("%H:%M:%S.%f")
         self.broker.event_engine.put(position_event)
 
     def updateAccountTime(self, timeStamp: str):
@@ -595,6 +641,7 @@ class IBApi(EWrapper, EClient):
 
     def tickSize(self, reqId: TickerId, tickType: TickType, size: int):
         super().tickSize(reqId, tickType, size)
+
         tick_event = self.broker.market_data_tick_dict[reqId]
         if tickType == TickTypeEnum.BID_SIZE:
             tick_event.tick_type = TickType.BID
@@ -612,11 +659,12 @@ class IBApi(EWrapper, EClient):
 
     def tickGeneric(self, reqId: TickerId, tickType: TickType, value: float):
         super().tickGeneric(reqId, tickType, value)
-        # print("TickGeneric. TickerId:", reqId, "TickType:", tickType, "Value:", value)
+        # _logger.info(f"TickGeneric. TickerId: {reqId}, TickType: {tickType}, Value: {value}")
         pass
 
     def tickString(self, reqId: TickerId, tickType: TickType, value: str):
         super().tickString(reqId, tickType, value)
+
         tick_event = self.broker.market_data_tick_dict[reqId]
         tick_event.timestamp = datetime.fromtimestamp(int(value))
         self.broker.event_engine.put(copy(tick_event))
@@ -793,8 +841,13 @@ class IBApi(EWrapper, EClient):
 
     def contractDetails(self, reqId: int, contractDetails: ContractDetails):
         super().contractDetails(reqId, contractDetails)
+        _logger.info(f'Contract Detail: {contractDetails.contract.localSymbol}, {contractDetails.contract.primaryExchange}')
         if reqId in self.broker.contract_detail_request_contract_dict.keys():
             self.broker.contract_detail_request_contract_dict[reqId] = contractDetails.contract
+            self.broker.sym_contract_dict[self.broker.contract_detail_request_symbol_dict[reqId]] = contractDetails.contract
+            self.broker.contract_symbol_dict[contractDetails.contract.conId] = self.broker.contract_detail_request_symbol_dict[reqId]
+        else:
+            _logger.error(f'Orphaned contract details request {reqId}, {contractDetails.underSymbol}')
 
     def bondContractDetails(self, reqId: int, contractDetails: ContractDetails):
         super().bondContractDetails(reqId, contractDetails)
@@ -878,7 +931,7 @@ class IBApi(EWrapper, EClient):
 
     def currentTime(self, time: int):
         super().currentTime(time)
-        msg = f'CurrentTime: {datetime.fromtimestamp(time).strftime("%Y%m%d %H:%M:%S")}'
+        msg = f'CurrentTime: {datetime.fromtimestamp(time).strftime("%H:%M:%S.%f")}'
         _logger.info(msg)
         self.broker.log(msg)
 
@@ -888,21 +941,22 @@ class IBApi(EWrapper, EClient):
               f"Currency: {contract.currency}, {execution}"
         _logger.info(msg)
 
-        if execution.orderId in self.broker.order_dict.keys():
-            full_symbol = self.broker.order_dict[execution.orderId]
-        else:      # not placed by algo
-            full_symbol = InteractiveBrokers.contract_to_symbol(contract)
-
         fill_event = FillEvent()
         fill_event.order_id = execution.orderId
         fill_event.fill_id = execution.execId
         fill_event.fill_price = execution.price
-        fill_event.fill_size=execution.shares * (1 if execution.side == 'BUY' else -1)
-        fill_event.fill_time=datetime.strptime(execution.time, "%Y%m%d  %H:%M:%S")
-        fill_event.exchange = contract.exchange
-        fill_event.full_symbol = full_symbol
+        fill_event.fill_size=execution.shares * (1 if execution.side == 'BOT' else -1)        # BOT SLD
+        fill_event.fill_time=datetime.strptime(execution.time, "%Y%m%d  %H:%M:%S").strftime("%H:%M:%S.%f")
+        fill_event.exchange = contract.exchange if contract.primaryExchange == '' else contract.primaryExchange
+        fill_event.account = self.broker.account
 
-        self.broker.put(fill_event)
+        if execution.orderId in self.broker.order_dict.keys():
+            fill_event.full_symbol = self.broker.order_dict[execution.orderId].full_symbol
+            fill_event.source = self.broker.order_dict[execution.orderId].source
+        else:      # not placed by algo
+            fill_event.full_symbol = InteractiveBrokers.contract_to_symbol(contract)
+
+        self.broker.event_engine.put(fill_event)
 
     def execDetailsEnd(self, reqId: int):
         super().execDetailsEnd(reqId)

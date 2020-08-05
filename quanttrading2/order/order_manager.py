@@ -15,12 +15,12 @@ class OrderManager(object):
     def __init__(self):
         self.order_dict = {}              # order_id ==> order
         self.fill_dict = {}                # fill_id ==> fill
-        self._standing_order_list = []  # order_id of stnading orders for convenience
         self._canceled_order_list = []  # order_id of canceled orders for convenience
 
     def reset(self):
         self.order_dict.clear()
         self.fill_dict.clear()
+        self._canceled_order_list = []
 
     def on_tick(self, tick_event):
         """
@@ -35,12 +35,9 @@ class OrderManager(object):
         on order status change from broker
         including canceled status
         """
-        if order_event.order_id < 0:  #
-            order_event.order_id = self.order_id
-            order_event.order_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')
-            order_event.order_status = OrderStatus.NEWBORN
-            self.order_id = self.order_id + 1
-            self.order_dict[order_event.order_id] = order_event
+        # there should be no negative order id if order is directly placed without queue.
+        if order_event.order_id < 0:
+            _logger.error(f'received negative orderid {order_event.order_id}')
 
         if order_event.order_id in self.order_dict:
             if (order_event.full_symbol != self.order_dict[order_event.order_id].full_symbol):
@@ -55,36 +52,34 @@ class OrderManager(object):
         # order_id not yet assigned, open order at connection or placed by trader?
         else:
             self.order_dict[order_event.order_id] = order_event
-
             return True
 
     def on_cancel(self, o):
-        """
-        on order canceled by trader
-       for stop orders, cancel here
-       for
-       """
-        pass
+        self._canceled_order_list.append(o.order_id)
+        if o.order_id in self.order_dict.keys():
+            self.order_dict[o.order_id].order_status = OrderStatus.CANCELED
+        else:
+            _logger.error('cancel order is not registered')
 
     def on_fill(self, fill_event):
         """
         on receive fill_event from broker
         """
-        if fill_event.fill_id in self.fill_dict:
+        if fill_event.fill_id in self.fill_dict.keys():
             _logger.error('fill exists')
         else:
             self.fill_dict[fill_event.fill_id] = fill_event
 
-        if fill_event.order_id in self.order_dict:
-            self.order_dict[fill_event.order_id].order_size -= fill_event.fill_size         # adjust it or keep it as original?
-            self.order_dict[fill_event.order_id].fill_size += fill_event.fill_size
-            self.order_dict[fill_event.order_id].fill_price = fill_event.fill_price
+            if fill_event.order_id in self.order_dict:
+                self.order_dict[fill_event.order_id].fill_size += fill_event.fill_size
+                self.order_dict[fill_event.order_id].fill_price = fill_event.fill_price   # TODO: take average
 
-            if (self.order_dict[fill_event.order_id].fill_size == 0):
-                self.order_dict[fill_event.order_id].order_status = OrderStatus.FILLED
-                self._standing_order_list.remove(fill_event.order_id)
+                if (self.order_dict[fill_event.order_id].order_size == self.order_dict[fill_event.order_id].fill_size):
+                    self.order_dict[fill_event.order_id].order_status = OrderStatus.FILLED
+                else:
+                    self.order_dict[fill_event.order_id].order_status = OrderStatus.PARTIALLY_FILLED
             else:
-                self.order_dict[fill_event.order_id].order_status = OrderStatus.PARTIALLY_FILLED
+                _logger.error(f'Fill event {fill_event.fill_id} has no matching order {fill_event.order_id}')
 
     def retrieve_order(self, order_id):
         try:
@@ -92,9 +87,9 @@ class OrderManager(object):
         except:
             return None
 
-    def retrieve_fill(self, internal_fill_id):
+    def retrieve_fill(self, fill_id):
         try:
-            return self.fill_dict[internal_fill_id]
+            return self.fill_dict[fill_id]
         except:
             return None
 

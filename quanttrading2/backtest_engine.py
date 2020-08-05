@@ -71,7 +71,7 @@ class BacktestEngine(object):
         )
 
         ## 4. set strategy
-        self._strategy.on_init(self._events_engine, self._data_board)
+        self._strategy.on_init(self._events_engine, self._data_board, self._position_manager)
         self._strategy.on_start()
 
         ## 5. performance manager and portfolio manager
@@ -97,16 +97,18 @@ class BacktestEngine(object):
         self._strategy.on_tick(tick_event)
 
     def _order_event_handler(self, order_event):
+        """
+        backtest doesn't send order_event back to strategy. It fills directly and becoems fill_event
+        """
         self._backtest_brokerage.place_order(order_event)
 
     def _fill_event_handler(self, fill_event):
         self._position_manager.on_fill(fill_event)
         self._performance_manager.on_fill(fill_event)
+        self._strategy.on_fill(fill_event)
 
     # -------------------------------- end of private functions -----------------------------#
-
-    # -------------------------------------- public functions -------------------------------#
-    def run(self, tear_sheet=True):
+    def run(self):
         """
         Run backtest
         """
@@ -116,5 +118,3 @@ class BacktestEngine(object):
         self._performance_manager.update_performance(self._current_time, self._position_manager, self._data_board)
 
         return self._performance_manager._equity, self._performance_manager._df_positions, self._performance_manager._df_trades
-
-    # ------------------------------- end of public functions -----------------------------#

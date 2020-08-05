@@ -130,8 +130,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self._order_manager.on_fill(fill_event)  # update order manager with fill
         self._strategy_manager.on_fill(fill_event)  # feed fill to strategy
         self.fill_window.fill_signal.emit(fill_event)     # display
-        self.order_window.update_order_status(fill_event.client_order_id,
-                                              self._order_manager.retrieve_order(fill_event.client_order_id).order_status)
+        self.order_window.update_order_status(fill_event.order_id,
+                                              self._order_manager.retrieve_order(fill_event.order_id).order_status)
 
     def _position_event_handler(self, position_event):
         self._position_manager.on_position(position_event)       # position received
@@ -146,29 +146,6 @@ class MainWindow(QtWidgets.QMainWindow):
     def _historical_event_handler(self, historical_event):
         print(historical_event)
 
-    def _outgoing_order_request_handler(self, o):
-        """
-         process o, check against risk manager and compliance manager
-        """
-        self.risk_manager.order_in_compliance(o)  # order pointer; modify order directly
-        self._order_manager.on_order_status(o)
-
-        msg = o.serialize()
-        print('send msg: ' + msg)
-        self._outgoing_queue.put(msg)
-
-    def _outgoing_account_request_handler(self, a):
-        msg = a.serialize()
-        print('send msg: ' + msg)
-        self._outgoing_queue.put(msg)
-
-    def _outgoing_position_request_handler(self, p):
-        msg = p.serialize()
-        print('send msg: ' + msg)
-        self._outgoing_queue.put(msg)
-
-    def _outgoing_log_msg_request_handler(self, g):
-        self.log_window.update_table(g)           # append to log window
     #################################################################################################
     # ------------------------------ Event Handler Ends --------------------------------------------#
     #################################################################################################
