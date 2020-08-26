@@ -6,6 +6,8 @@ import os
 import webbrowser
 import psutil
 from queue import Queue, Empty
+from copy import copy
+import logging
 from PyQt5 import QtCore, QtWidgets, QtGui
 from datetime import datetime
 
@@ -28,6 +30,10 @@ from .ui_account_window import AccountWindow
 from .ui_strategy_window import StrategyWindow
 from .ui_log_window import LogWindow
 from .ui_trade_menu import TradeMenu
+from .ui_position_menu import PositionMenu
+
+_logger = logging.getLogger(__name__)
+_logger_tick = logging.getLogger('tick_recorder')
 
 
 class MainWindow(QtWidgets.QMainWindow):
@@ -37,23 +43,27 @@ class MainWindow(QtWidgets.QMainWindow):
         ## member variables
         self._current_time = None
         self._config = config
+        self.multiplier_dict = dict()
         self.central_widget = None
-        self.message_window = None
+        self.log_window = None
         self.order_window = None
         self.fill_window = None
         self.position_window = None
         self.account_window = None
         self.strategy_window = None
 
-        self._ui_events_engine = LiveEventEngine()  # update ui
-        self._broker = InteractiveBrokers(self._ui_events_engine, self._config['account'])
-        self._position_manager = PositionManager()
-        self._order_manager = OrderManager()
+        self._msg_events_engine = LiveEventEngine()  # msg engine
+        self._tick_events_engine = LiveEventEngine()  # tick data engine
+        self._broker = InteractiveBrokers(self._msg_events_engine, self._tick_events_engine, self._config['account'])
+        self._position_manager = PositionManager()      # global position manager
+        self._position_manager.set_multiplier(self.multiplier_dict)
+        self._order_manager = OrderManager()          # global order manager
         self._data_board = DataBoard()
         self.risk_manager = PassThroughRiskManager()
         self.account_manager = AccountManager(self._config['account'])
 
-        self._strategy_manager = StrategyManager(self._config, strat_dict, self._broker, self._order_manager, self._position_manager, self._data_board)
+        self._strategy_manager = StrategyManager(self._config, self._broker, self._order_manager, self._position_manager, self.risk_manager, self._data_board, self.multiplier_dict)
+        self._load_strategy(strat_dict)
 
         self.widgets = dict()
         self._schedule_timer = QtCore.QTimer()                  # task scheduler; TODO produce result_packet
@@ -67,19 +77,36 @@ class MainWindow(QtWidgets.QMainWindow):
         self.init_central_area()
 
         ## wire up event handlers
-        self._ui_events_engine.register_handler(EventType.TICK, self._tick_event_handler)
-        self._ui_events_engine.register_handler(EventType.ORDER, self.order_window.order_status_signal.emit)
-        self._ui_events_engine.register_handler(EventType.FILL, self._fill_event_handler)
-        self._ui_events_engine.register_handler(EventType.POSITION, self._position_event_handler)
-        self._ui_events_engine.register_handler(EventType.ACCOUNT, self.account_window.account_signal.emit)
-        self._ui_events_engine.register_handler(EventType.CONTRACT, self._contract_event_handler)
-        self._ui_events_engine.register_handler(EventType.HISTORICAL, self._historical_event_handler)
-        self._ui_events_engine.register_handler(EventType.LOG, self.log_window.msg_signal.emit)
+        self._tick_events_engine.register_handler(EventType.TICK, self._tick_event_handler)
+        self._msg_events_engine.register_handler(EventType.ORDER, self._order_status_event_handler)
+        self._msg_events_engine.register_handler(EventType.ORDER, self.order_window.order_status_signal.emit)  # display
+        self._msg_events_engine.register_handler(EventType.FILL, self._fill_event_handler)
+        self._msg_events_engine.register_handler(EventType.FILL, self.fill_window.fill_signal.emit)         # display
+        self._msg_events_engine.register_handler(EventType.POSITION, self._position_event_handler)
+        self._msg_events_engine.register_handler(EventType.POSITION, self.position_window.position_signal.emit)   # display
+        self._msg_events_engine.register_handler(EventType.ACCOUNT, self.account_window.account_signal.emit)
+        self._msg_events_engine.register_handler(EventType.CONTRACT, self._contract_event_handler)
+        self._msg_events_engine.register_handler(EventType.HISTORICAL, self._historical_event_handler)
+        self._msg_events_engine.register_handler(EventType.LOG, self.log_window.msg_signal.emit)
 
         ## start
-        self._ui_events_engine.start()
+        self._msg_events_engine.start()
+        self._tick_events_engine.start()
 
         self.connect_to_broker()
+
+    def _load_strategy(self, strat_dict):
+        i = 1   # 0 is mannual discretionary trade, or not found
+        # similar to backtest; strategy sets capital, params, and symbols
+        for k, v in strat_dict.items():
+            v.id = i
+            v.name = k
+            v.active = self._config['strategy'][v.name]['active']
+            v.set_capital(self._config['strategy'][v.name]['capital'])  # float
+            v.set_params(self._config['strategy'][v.name]['params'])  # dict
+            v.set_symbols(self._config['strategy'][v.name]['symbols'])  # list  # not before multiplier is removed
+            i += 1
+        self._strategy_manager.load_strategy(strat_dict)
 
     #################################################################################################
     # -------------------------------- Event Handler   --------------------------------------------#
@@ -93,49 +120,93 @@ class MainWindow(QtWidgets.QMainWindow):
     def open_trade_widget(self):
         widget = self.widgets.get('trade_menu', None)
         if not widget:
-            widget = TradeMenu(self._broker, self._ui_events_engine)
+            widget = TradeMenu(self._broker, self._msg_events_engine, self._strategy_manager._multiplier_dict)
             self.widgets['trade_menu'] = widget
+        widget.show()
+
+    def open_position_widget(self):
+        widget = self.widgets.get('position_menu', None)
+        if not widget:
+            widget = PositionMenu(self._strategy_manager)
+            self.widgets['position_menu'] = widget
         widget.show()
 
     def update_status_bar(self, message):
         self.statusBar().showMessage(message)
+        self.strategy_window.update_pnl()        # pnl update
+        # self._broker.heartbeat()
+        # _logger.info(f'Current tick queue size: {self._tick_events_engine._queue.qsize()}')
 
     def start_strategy(self):
-        self.strategy_window.update_status(self.strategy_window.currentRow(), True)
-
-    def pause_strategy(self):
-        pass
+        try:
+            sid_txt = self.strategy_window.item(self.strategy_window.currentRow(), 0).text()
+            _logger.info(f'control: start_strategy {sid_txt}')
+            self.strategy_window.update_status(self.strategy_window.currentRow(), True)
+        except:
+            _logger.error(f'control: start_strategy error, no row selected')
 
     def stop_strategy(self):
-        self.strategy_window.update_status(self.strategy_window.currentRow(), False)
+        try:
+            sid_txt = self.strategy_window.item(self.strategy_window.currentRow(), 0).text()
+            _logger.info(f'control: stop_strategy {sid_txt}')
+            self.strategy_window.update_status(self.strategy_window.currentRow(), False)
+        except:
+            _logger.error(f'control: stop_strategy error, no row selected')
+
+    def liquidate_strategy(self):
+        try:
+            sid_txt = self.strategy_window.item(self.strategy_window.currentRow(), 0).text()
+            _logger.info(f'control: liquidate_strategy {sid_txt}')
+            sid = int(self.strategy_window.item(self.strategy_window.currentRow(), 0).text())
+            self._strategy_manager.flat_strategy(sid)
+        except:
+            _logger.error(f'control: liquidate_strategy error, no row selected')
+
+    def start_all_strategy(self):
+        _logger.info(f'control: start all strategy')
+        self._strategy_manager.start_all()
+        for i in range(self.strategy_window.rowCount()):
+            self.strategy_window.setItem(i, 7, QtWidgets.QTableWidgetItem('active'))
+
+    def stop_all_strategy(self):
+        _logger.info(f'control: stop all strategy')
+        self._strategy_manager.stop_all()
+        for i in range(self.strategy_window.rowCount()):
+            self.strategy_window.setItem(i, 7, QtWidgets.QTableWidgetItem('inactive'))
+
+    def liquidate_all_strategy(self):
+        _logger.info(f'control: liquidate all strategy')
+        self._strategy_manager.flat_all()
 
     def closeEvent(self, a0: QtGui.QCloseEvent):
-        print('closing main window')
+        _logger.info('closing main window')
         self.disconnect_from_broker()
-        self._ui_events_engine.stop()
+        self._msg_events_engine.stop()
+        self._tick_events_engine.stop()
 
     def _tick_event_handler(self, tick_event):
         self._current_time = tick_event.timestamp
 
-        self._data_board.on_tick(tick_event)       # update databoard
-        self._order_manager.on_tick(tick_event)     # check standing stop orders
         self._strategy_manager.on_tick(tick_event)  # feed strategies
+        # self._position_manager.mark_to_market(tick_event.timestamp, tick_event.full_symbol, tick_event.price, self._data_board)   # do not mtm; just update from position_event
+        self._data_board.on_tick(tick_event)       # update databoard
+        _logger_tick.info(tick_event)
 
-    def _order_status_event_handler(self, order_status_event):  # including cancel
-        # this is moved to ui_thread for consistency
-        pass
+    def _order_status_event_handler(self, order_event):  # including cancel
+        # self._order_manager.on_order_status(order_event)     # this moves to order_window to tell it to update
+        self._strategy_manager.on_order_status(order_event)
+        self.strategy_window.update_order(order_event)
 
     def _fill_event_handler(self, fill_event):
-        # update portfolio manager for pnl
+        # self._position_manager.on_fill(fill_event)   # update portfolio manager for pnl    # do not fill; just update from position_event
         self._order_manager.on_fill(fill_event)  # update order manager with fill
+        self._position_manager.on_fill(fill_event)
         self._strategy_manager.on_fill(fill_event)  # feed fill to strategy
-        self.fill_window.fill_signal.emit(fill_event)     # display
-        self.order_window.update_order_status(fill_event.order_id,
-                                              self._order_manager.retrieve_order(fill_event.order_id).order_status)
+        self.order_window.update_order_status(fill_event.order_id)        # let order_window listen to fill as well
+        self.strategy_window.update_fill(fill_event)
 
     def _position_event_handler(self, position_event):
         self._position_manager.on_position(position_event)       # position received
-        self.position_window.position_signal.emit(position_event)     # display
 
     def _account_event_handler(self, account_event):
         pass
@@ -144,7 +215,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._position_manager.on_contract(contract_event)
 
     def _historical_event_handler(self, historical_event):
-        print(historical_event)
+        pass
 
     #################################################################################################
     # ------------------------------ Event Handler Ends --------------------------------------------#
@@ -157,6 +228,13 @@ class MainWindow(QtWidgets.QMainWindow):
         menubar = self.menuBar()
 
         sysMenu = menubar.addMenu('Menu')
+        sys_positionAction = QtWidgets.QAction('CheckPos', self)
+        sys_positionAction.setStatusTip('Check Positions')
+        sys_positionAction.triggered.connect(self.open_position_widget)
+        sysMenu.addAction(sys_positionAction)
+
+        sysMenu.addSeparator()
+
         sys_tradeAction = QtWidgets.QAction('Trade', self)
         sys_tradeAction.setStatusTip('Manual Trade')
         sys_tradeAction.triggered.connect(self.open_trade_widget)
@@ -187,15 +265,22 @@ class MainWindow(QtWidgets.QMainWindow):
         control_layout = QtWidgets.QHBoxLayout()
         self.btn_strat_start = QtWidgets.QPushButton('Start_Strat')
         self.btn_strat_start.clicked.connect(self.start_strategy)
-        self.btn_strat_pause = QtWidgets.QPushButton('Pause_Strat')
-        self.btn_strat_pause.clicked.connect(self.pause_strategy)
         self.btn_strat_stop = QtWidgets.QPushButton('Stop_Strat')
         self.btn_strat_stop.clicked.connect(self.stop_strategy)
         self.btn_strat_liquidate = QtWidgets.QPushButton('Liquidate_Strat')
+        self.btn_strat_liquidate.clicked.connect(self.liquidate_strategy)
+        self.btn_all_start = QtWidgets.QPushButton('Start_All')
+        self.btn_all_start.clicked.connect(self.start_all_strategy)
+        self.btn_all_stop = QtWidgets.QPushButton('Stop_All')
+        self.btn_all_stop.clicked.connect(self.stop_all_strategy)
+        self.btn_all_liquidate = QtWidgets.QPushButton('Liquidate_All')
+        self.btn_all_liquidate.clicked.connect(self.liquidate_all_strategy)
         control_layout.addWidget(self.btn_strat_start)
-        control_layout.addWidget(self.btn_strat_pause)
         control_layout.addWidget(self.btn_strat_stop)
         control_layout.addWidget(self.btn_strat_liquidate)
+        control_layout.addWidget(self.btn_all_start)
+        control_layout.addWidget(self.btn_all_stop)
+        control_layout.addWidget(self.btn_all_liquidate)
 
         top.setLayout(control_layout)
         # -------------------------------- Bottom ------------------------------------------#
@@ -223,7 +308,7 @@ class MainWindow(QtWidgets.QMainWindow):
         tab2_layout.addWidget(self.order_window)
         tab2.setLayout(tab2_layout)
 
-        self.fill_window =FillWindow(self._order_manager)
+        self.fill_window =FillWindow()
         tab3_layout = QtWidgets.QVBoxLayout()
         tab3_layout.addWidget(self.fill_window)
         tab3.setLayout(tab3_layout)
@@ -268,4 +353,4 @@ class StatusThread(QtCore.QThread):
             cpuPercent = psutil.cpu_percent()
             memoryPercent = psutil.virtual_memory().percent
             self.status_update.emit('CPU Usage: ' + str(cpuPercent) + '% Memory Usage: ' + str(memoryPercent) + '%')
-            self.sleep(1)
+            self.sleep(5)

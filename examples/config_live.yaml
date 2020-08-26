@@ -3,32 +3,25 @@ theme: dark           # white, dark
 host: '127.0.0.1'
 port: 7497
 client_id: 0
+
 #-------------- active strategies -------------#
 strategy:
   MovingAverageCrossStrategy:
+    active: False
+    capital: 10000
     params:
-      short_window: 20
-      long_window: 80
+      G: 20
     symbols:
-      - SPY STK SMART
-      - AAPL STK SMART
-      - AMZN STK SMART
-  BuyAndHoldStrategy:
-    params:
-      ticks: 5
-    symbols:
-      - SPY STK SMART
-      - AMZN STK SMART
-      - MSFT STK SMART
+      - CLV0 FUT NYMEX 1000
   OrderPerIntervalStrategy:
-    path: 'd:/workspace/quanttrading2/examples/order_per_interval_strategy.py'
+    active: False
+    capital: 50000
     params:
-      tick_trigger_threshold: 50
-      tick_trigger_threshold2: 100
+      tick_trigger_threshold: 500
     symbols:
-      - SPY STK SMART
-      - AAPL STK SMART
-      - AMZN STK SMART
-      - ESU0 FUT GLOBEX
-      - CLU0 FUT NYMEX
-      - NGU0 FUT NYMEX
+      #- SPY STK SMART
+      #- AAPL STK SMART
+      #- AMZN STK SMART
+      - ESU0 FUT GLOBEX 50
+      #- CLV0 FUT NYMEX 1000
+      #- NGV0 FUT NYMEX 10000

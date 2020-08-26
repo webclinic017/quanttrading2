@@ -3,6 +3,9 @@
 from queue import Queue, Empty
 from threading import Thread
 from collections import defaultdict
+import logging
+
+_logger = logging.getLogger(__name__)
 
 
 class LiveEventEngine(object):
@@ -31,17 +34,17 @@ class LiveEventEngine(object):
         run dispatcher
         """
         while self.__active == True:
+            event_type=None
             try:
                 event = self._queue.get(block=True, timeout=1)
+                event_type = event.event_type
                 # call event handlers
                 if event.event_type in self._handlers:
                     [handler(event) for handler in self._handlers[event.event_type]]
-
             except Empty:
                 pass
-                #print('Empty event queue')
             except Exception as e:
-                print("Error {0}".format(str(e.args[0])).encode("utf-8"))
+                _logger.error(f"Event {event_type}, Error {str(e)}")
 
     #----------------------------- end of private functions ---------------------------#
 

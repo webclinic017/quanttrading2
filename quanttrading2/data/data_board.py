@@ -29,7 +29,7 @@ class DataBoard(object):
         """
         Returns the most recent price for a given ticker
         """
-        if symbol in self._current_data_dict:       # tick takes priority
+        if symbol in self._current_data_dict.keys():
             return self._current_data_dict[symbol].price
         elif symbol in self._hist_data_dict.keys():
             return self._hist_data_dict[symbol].loc[self._current_time, 'Close']
@@ -42,12 +42,12 @@ class DataBoard(object):
         """
         Returns the most recent timestamp for a given ticker
         """
-        if symbol in self._current_data_dict:
+        if symbol in self._current_data_dict.keys():
             return self._current_data_dict[symbol].timestamp
         elif self._PLACEHOLDER in self._current_data_dict:
             return self._current_data_dict[self._PLACEHOLDER].timestamp
         else:
-            return None
+            return self._current_time
 
     def get_current_timestamp(self):
         return self._current_time

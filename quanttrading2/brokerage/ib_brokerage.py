@@ -36,11 +36,12 @@ _logger = logging.getLogger(__name__)
 
 
 class InteractiveBrokers(BrokerageBase):
-    def __init__(self, event_engine, account: str):
+    def __init__(self, msg_event_engine, tick_event_engine, account: str):
         """
         Initialises the handler, setting the event queue
         """
-        self.event_engine = event_engine          # save events to event queue
+        self.event_engine = msg_event_engine          # save events to event queue
+        self.tick_event_engine = tick_event_engine
         self.api = IBApi(self)
         self.account = account
         self.contract_detail_request_contract_dict = {}        # reqid ==> contract
@@ -59,8 +60,8 @@ class InteractiveBrokers(BrokerageBase):
         self.account_summary = AccountEvent()
         self.account_summary.brokerage = 'IB'
         self.clientid = 0
-        self.reqid = 0
-        self.orderid = 0
+        self.reqid = 0           # next/available reqid
+        self.orderid = 0         # next/available orderid
 
     def connect(self, host='127.0.0.1', port=7497, clientId=0):
         self.clientid = clientId
@@ -105,14 +106,16 @@ class InteractiveBrokers(BrokerageBase):
             _logger.error(f'Failed to create order to place {order_event.full_symbol}')
             return
 
-        order_event.order_id = self.orderid
+        if order_event.order_id < 0:
+            order_event.order_id = self.orderid
+            self.orderid += 1
         order_event.account = self.account
         order_event.timestamp = datetime.now().strftime("%H:%M:%S.%f")
-        order_event.order_status = OrderStatus.NEWBORN
-        self.order_dict[self.orderid] = order_event
+        order_event.order_status = OrderStatus.ACKNOWLEDGED       # acknowledged
+        self.order_dict[order_event.order_id] = order_event
+        _logger.info(f'Order acknowledged {order_event.order_id}, {order_event.full_symbol}')
         self.event_engine.put(copy(order_event))
-        self.api.placeOrder(self.orderid, ib_contract, ib_order)
-        self.orderid += 1
+        self.api.placeOrder(order_event.order_id, ib_contract, ib_order)
 
     def cancel_order(self, order_id):
         if not self.api.connected:
@@ -221,7 +224,11 @@ class InteractiveBrokers(BrokerageBase):
     def unsubscribe_positions(self):
         self.api.cancelPositions()
 
-    def request_historical_data(self, symbol, start=None, end=None):
+    def request_historical_data(self, symbol, end=None):
+        """
+        1800 S (30 mins)
+        1 sec - 30 mins
+        """
         ib_contract = InteractiveBrokers.symbol_to_contract(symbol)
 
         if end:
@@ -230,7 +237,7 @@ class InteractiveBrokers(BrokerageBase):
             end_str = ''
 
         self.hist_data_request_dict[self.reqid] = symbol
-        self.api.reqHistoricalData(self.reqid, ib_contract, end_str, '1 D', '1 sec', 'TRADES', 1, 1, True, [])
+        self.api.reqHistoricalData(self.reqid, ib_contract, end_str, '1800 S', '1 secs', 'TRADES', 1, 1, False, [])  # first 1 is useRTH
         self.reqid += 1
 
     def cancel_historical_data(self, reqid):
@@ -241,6 +248,12 @@ class InteractiveBrokers(BrokerageBase):
 
     def setServerLogLevel(self, level=1):
         self.api.setServerLogLevel(level)
+
+    def heartbeat(self):
+        if self.api.isConnected():
+            _logger.info('reqPositions')
+            # self.api.reqPositions()
+            self.reqCurrentTime()     # EWrapper::currentTime
 
     def log(self, msg):
         timestamp = datetime.now().strftime("%H:%M:%S.%f")
@@ -428,6 +441,8 @@ class IBApi(EWrapper, EClient):
             order_event.order_status = OrderStatus.PENDING_SUBMIT
         elif orderState.status == 'Cancelled':
             order_event.order_status = OrderStatus.CANCELED
+        elif orderState.status == 'Inactive':   # e.g. exchange closed
+            order_event.order_status = OrderStatus.ERROR
         else:
             order_event.order_status = OrderStatus.UNKNOWN
 
@@ -436,7 +451,7 @@ class IBApi(EWrapper, EClient):
     def openOrderEnd(self):
         super().openOrderEnd()
         _logger.info("OpenOrderEnd")
-        _logger.info(f"Received %d openOrders {len(list(self.broker.order_dict.keys()))}")
+        _logger.info(f"Received openOrders {len(list(self.broker.order_dict.keys()))}")
 
     def orderStatus(self, orderId: OrderId, status: str, filled: float,
                     remaining: float, avgFillPrice: float, permId: int,
@@ -472,10 +487,12 @@ class IBApi(EWrapper, EClient):
             order_event.order_status = OrderStatus.FILLED
         elif status == 'PreSubmitted':
             order_event.order_status = OrderStatus.PENDING_SUBMIT
-        elif status == 'Cancelled':
+        elif status == 'Cancelled' or status == 'ApiCancelled':
             order_event.order_status = OrderStatus.CANCELED
             order_event.fill_size = filled         # remaining = order_size - fill_size
             order_event.cancel_time = datetime.now().strftime("%H:%M:%S.%f")
+        elif status == 'Inactive':   # e.g. exchange closed
+            order_event.order_status = OrderStatus.ERROR
         else:
             order_event.order_status = OrderStatus.UNKNOWN
         order_event.fill_size = filled
@@ -618,13 +635,14 @@ class IBApi(EWrapper, EClient):
 
     def marketDataType(self, reqId: TickerId, marketDataType: int):
         super().marketDataType(reqId, marketDataType)
-        _logger.info("MarketDataType. ReqId:", reqId, "Type:", marketDataType)
+        _logger.info(f"MarketDataType. ReqId: {reqId}, Type: {marketDataType}")
 
     def tickPrice(self, reqId: TickerId, tickType: TickType, price: float,
                   attrib: TickAttrib):
         super().tickPrice(reqId, tickType, price, attrib)
 
         tick_event = self.broker.market_data_tick_dict[reqId]
+        tick_event.timestamp = datetime.now()
         if tickType == TickTypeEnum.BID:
             tick_event.tick_type = TickType.BID
             tick_event.bid_price_L1 = price
@@ -637,12 +655,13 @@ class IBApi(EWrapper, EClient):
         else:
             return
 
-        self.broker.event_engine.put(copy(tick_event))
+        self.broker.tick_event_engine.put(copy(tick_event))
 
     def tickSize(self, reqId: TickerId, tickType: TickType, size: int):
         super().tickSize(reqId, tickType, size)
 
         tick_event = self.broker.market_data_tick_dict[reqId]
+        tick_event.timestamp = datetime.now()
         if tickType == TickTypeEnum.BID_SIZE:
             tick_event.tick_type = TickType.BID
             tick_event.bid_size_L1 = size
@@ -655,7 +674,7 @@ class IBApi(EWrapper, EClient):
         else:
             return
 
-        self.broker.event_engine.put(copy(tick_event))
+        self.broker.tick_event_engine.put(copy(tick_event))
 
     def tickGeneric(self, reqId: TickerId, tickType: TickType, value: float):
         super().tickGeneric(reqId, tickType, value)
@@ -664,10 +683,10 @@ class IBApi(EWrapper, EClient):
 
     def tickString(self, reqId: TickerId, tickType: TickType, value: str):
         super().tickString(reqId, tickType, value)
-
-        tick_event = self.broker.market_data_tick_dict[reqId]
-        tick_event.timestamp = datetime.fromtimestamp(int(value))
-        self.broker.event_engine.put(copy(tick_event))
+        pass
+        # tick_event = self.broker.market_data_tick_dict[reqId]
+        # tick_event.timestamp = datetime.fromtimestamp(int(value))
+        # self.broker.tick_event_engine.put(copy(tick_event))
 
     def tickSnapshotEnd(self, reqId: int):
         super().tickSnapshotEnd(reqId)
@@ -767,7 +786,7 @@ class IBApi(EWrapper, EClient):
         bar_event.close_price = bar.close
         bar_event.volume = bar.volume
 
-        self.broker.event_engine.put(bar_event)
+        self.broker.tick_event_engine.put(bar_event)
 
     def historicalDataEnd(self, reqId: int, start: str, end: str):
         super().historicalDataEnd(reqId, start, end)
@@ -938,7 +957,7 @@ class IBApi(EWrapper, EClient):
     def execDetails(self, reqId: int, contract: Contract, execution: Execution):
         super().execDetails(reqId, contract, execution)
         msg = f"ExecDetails. ReqId: {reqId}, Symbol: {contract.symbol}, SecType: {contract.secType}, " \
-              f"Currency: {contract.currency}, {execution}"
+              f"Currency: {contract.currency}, oid: {execution.orderId}, {execution.price}, {execution.shares}"
         _logger.info(msg)
 
         fill_event = FillEvent()

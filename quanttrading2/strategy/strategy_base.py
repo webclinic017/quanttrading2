@@ -4,6 +4,12 @@ from abc import ABCMeta, abstractmethod
 from datetime import datetime
 from ..order.order_event import OrderEvent
 from ..order.order_type import OrderType
+from ..order import OrderManager
+from ..position import PositionManager
+import logging
+
+_logger = logging.getLogger(__name__)
+
 
 class StrategyBase(metaclass=ABCMeta):
     """
@@ -15,20 +21,19 @@ class StrategyBase(metaclass=ABCMeta):
         :param symbols:
         :param events_engine:backtest_event_engine or live_event engine that provides queue_.put()
         """
-        self.symbols = []
-        self.id = -1
-        self.name = ''
-        self.author = ''
-        self.capital = 0.0
-        self.cash = 0.0
-        self.broker = None
-        self._data_board = None
-        self.initialized = False
+        self.id = -1                    # id
+        self.name = ''                  # name
+        self.symbols = []               # symbols interested
+        self.strategy_manager = None     # to place order through strategy_manager
+        self._data_board = None         # to get current data
+        self._position_manager = PositionManager()    # track local positions and cash
+        self._order_manager = OrderManager()        # manage local (standing) orders and fills
+
         self.active = False
+        self.initialized = False
 
     def set_capital(self, capital):
-        self.capital = capital
-        self.cash = capital
+        self._position_manager.set_capital(capital)
 
     def set_symbols(self, symbols):
         self.symbols = symbols
@@ -41,10 +46,11 @@ class StrategyBase(metaclass=ABCMeta):
                 except:
                     pass
 
-    def on_init(self, broker, data_board=None, position_manager=None):
-        self.broker = broker
+    def on_init(self, strategy_manager, data_board, multiplier_dict):
+        self.strategy_manager = strategy_manager
         self._data_board = data_board
-        self._position_manager = position_manager
+        self._position_manager.set_multiplier(multiplier_dict)
+        self._position_manager.reset()
         self.initialized = True
 
     def on_start(self):
@@ -53,11 +59,13 @@ class StrategyBase(metaclass=ABCMeta):
     def on_stop(self):
         self.active = False
 
-    def on_tick(self, event):
+    def on_tick(self, tick_event):
         """
         Respond to tick
         """
-        pass
+        # for live trading, turn off p&l tick by not calling super.on_tick()
+        # for backtest, call super().on_tick() if need to track positions or npv or cash
+        self._position_manager.mark_to_market(tick_event.timestamp, tick_event.full_symbol, tick_event.price, self._data_board)
 
     def on_order_status(self, order_event):
         """
@@ -65,63 +73,64 @@ class StrategyBase(metaclass=ABCMeta):
         :return:
         """
         #raise NotImplementedError("Should implement on_order_status()")
-        pass
-
-    def on_cancel(self):
-        """
-        on order canceled
-        :return:
-        """
-        pass
+        self._order_manager.on_order_status(order_event)
 
     def on_fill(self, fill_event):
         """
         on order filled
-        :return:
+        derived class call super().on_fill first
         """
-        pass
+        self._position_manager.on_fill(fill_event)
+        self._order_manager.on_fill(fill_event)
 
     def place_order(self, o):
         """
-        For live trading; It will be consistent with backtest
-        if we use an outbound queue to send order to live broker
-        Currently it calls simply the ib.placeOrder method
-        Because order is placed directly; all subsequent on_order messages are order status updates
-        :param o:
-        :return:
+        expect user to set up order type, order size and order price
         """
         o.source = self.id         # identify source
-        o.create_time = datetime.now().strftime('%H:%M:%S.%f')
+        if o.create_time is None:
+            o.create_time = datetime.now().strftime('%H:%M:%S.%f')
         if (self.active):
-            self.broker.place_order(o)
+            self.strategy_manager.place_order(o)
 
-    def adjust_position(self, sym, size_from, size_to):
+    def adjust_position(self, sym, size_from, size_to, timestamp=None):
         """
-        for backtest; it puts order into an outbound events_engine to broker
+        use market order to adjust position
         :param sym:
         :param size_from:
         :param size_to:
+        :param timestamp: used by backtest broker to get price on timestamp
         :return:
         """
+        if size_from == size_to:
+            return
         o = OrderEvent()
         o.full_symbol = sym
         o.order_type = OrderType.MARKET
         o.order_size = size_to - size_from
         o.source = self.id  # identify source
-        o.create_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')
+        if timestamp is None:
+            o.create_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')
+        else:
+            o.create_time = timestamp
         if (self.active):
-            self.broker.put(o)
+            self.strategy_manager.place_order(o)
 
     def cancel_order(self, oid):
-        pass
+        if oid in self._order_manager.standing_order_set:
+            self._order_manager.on_cancel(oid)
+            self.strategy_manager.cancel_order(oid)
+        else:
+            _logger.error(f'Not a standing order to be cancelled, sid {id}, oid {oid}')
 
     def cancel_all(self):
         """
         cancel all standing orders from this strategy id
         :return:
         """
-        pass
-
+        for oid in self._order_manager.standing_order_set:
+            self._order_manager.on_cancel(oid)
+            self.strategy_manager.cancel_order(oid)
 
 class Strategies(StrategyBase):
     """

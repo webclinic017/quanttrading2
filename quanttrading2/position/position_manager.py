@@ -18,21 +18,26 @@ class PositionManager(object):
         self.current_total_capital = 0
         self.contracts = {}            # symbol ==> contract
         self.positions = {}        # symbol ==> positions
-        self.orders = {}               # order id ==> orders and order status; partially fill
-        self._df_fvp = None
+        self.multiplier_dict = {}        # sym ==> multiplier
+
+    def set_multiplier(self, multiplier_dict):
+        self.multiplier_dict = multiplier_dict
 
     def set_capital(self, initial_capital):
         self.initial_capital = initial_capital
-
-    def set_dvp(self, df_fvp=None):
-        self._df_fvp = df_fvp
 
     def reset(self):
         self.cash = self.initial_capital
         self.current_total_capital = self.initial_capital
         self.contracts.clear()
         self.positions.clear()
-        self.orders.clear()
+
+    def get_holdings_count(self):
+        n = 0
+        for s, p in self.positions.items():
+            if p.size != 0:
+                n+=1
+        return n
 
     def get_position_size(self, symbol):
         if symbol in self.positions.keys():
@@ -51,14 +56,9 @@ class PositionManager(object):
             _logger.info("Contract %s information already exists " % contract.full_symbol)
 
     def on_position(self, pos_event):
-        """get initial position"""
-        # TODO, current_total_capital accounts for initial positions
+        """respond to updatePortfolio; global position_manager only"""
         pos = pos_event.to_position()
-
-        if pos.full_symbol not in self.positions:
-            self.positions[pos.full_symbol] = pos
-        else:
-            _logger.error("Symbol %s already exists in the portfolio " % pos.full_symbol)
+        self.positions[pos.full_symbol] = pos
 
     def on_fill(self, fill_event):
         """
@@ -67,11 +67,7 @@ class PositionManager(object):
         """
         # sell will get cash back
         sym = fill_event.full_symbol
-        multiplier = 1
-        try:
-            multiplier = self._df_fvp.loc[sym, 'dvp']
-        except:
-            pass
+        multiplier = self.multiplier_dict.get(sym, 1)
 
         self.cash -= (fill_event.fill_size * fill_event.fill_price)*multiplier + fill_event.commission
         self.current_total_capital -= fill_event.commission                   # commission is a cost
@@ -81,16 +77,22 @@ class PositionManager(object):
         else:
             self.positions[fill_event.full_symbol] = fill_event.to_position()
 
-    def mark_to_market(self, current_time, symbol, last_price, data_board):
-        #for sym, pos in self.positions.items():
-        sym = symbol
-        multiplier = 1
-        try:
-            multiplier = self._df_fvp.loc[sym, 'dvp']
-        except:
-            pass
-        if symbol in self.positions:
-            # TODO: for place holder case, nothing updated
+    def mark_to_market(self, time_stamp, symbol, last_price, data_board):
+        """
+        from previous timestamp to current timestamp. Pnl from holdings
+        """
+        if symbol == 'PLACEHOLDER':        # backtest placeholder, update all
+            for sym, pos in self.positions.items():
+                multiplier = self.multiplier_dict.get(sym, 1)
+                real_last_price = data_board.get_hist_price(sym, time_stamp).Close.iloc[-1]         # not PLACEHOLDER
+                pos.mark_to_market(real_last_price, multiplier)
+                # data board not updated yet; get_last_time return previous time_stamp
+                self.current_total_capital += self.positions[sym].size * (real_last_price - data_board.get_last_price(sym)) * multiplier
+        elif symbol in self.positions:
+            # this is a quick way based on one symbol; actual pnl should sum up across positions
+            multiplier = self.multiplier_dict.get(symbol, 1)
             self.positions[symbol].mark_to_market(last_price, multiplier)
-            # data board not updated yet
-            self.current_total_capital += self.positions[symbol].size * (last_price - data_board.get_last_price(sym)) * multiplier
+            prev_price = data_board.get_last_price(symbol)
+            if prev_price is not None:    # in case data board hasn't been updated/empty
+                self.current_total_capital += self.positions[symbol].size * (last_price - prev_price) * multiplier
+

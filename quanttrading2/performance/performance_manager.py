@@ -12,22 +12,19 @@ class PerformanceManager(object):
     Record equity, positions, and trades in accordance to pyfolio format
     First date will be the first data start date
     """
-    def __init__(self, fvp=None):
+    def __init__(self, multiplier_dict):
         self._symbols = []
-        self._df_fvp = pd.DataFrame(columns=['dvp'])
+        self.multiplier_dict = multiplier_dict          # sym ==> multiplier
 
         self._equity = None
         self._df_positions = None
         self._df_trades = None
 
     def add_watch(self, data_key, data):
-        if 'Close' in data.columns:
+        if 'Close' in data.columns:             # OHLCV
             self._symbols.append(data_key)
-        else:
+        else:           # CLZ20, CLZ21
             self._symbols.extend(data.columns)
-
-    def set_dvp(self, df_dvp=None):
-        self._df_fvp = df_dvp
 
     #  or each sid
     def reset(self):
@@ -48,9 +45,11 @@ class PerformanceManager(object):
             index=[fill_event.fill_time]))
 
     def update_performance(self, current_time, position_manager, data_board):
-        if self._equity.empty:
+        """
+        update previous time/date
+        """
+        if self._equity.empty:         # no previous day
             self._equity[current_time] = 0.0
-            return
 
         # on a new time/date, calculate the performances for previous time/date
         if current_time != self._equity.index[-1]:
@@ -64,13 +63,9 @@ class PerformanceManager(object):
         equity = 0.0
         self._df_positions.loc[performance_time] = [0] * len(self._df_positions.columns)
         for sym, pos in position_manager.positions.items():
-            multiplier = 1
-            try:
-                multiplier = self._df_fvp.loc[sym, 'dvp']
-            except:
-                pass
+            multiplier = self.multiplier_dict.get(sym, 1)
 
-            # data_board hasn't been updated yet
+            # data_board (timestamp) hasn't been updated yet
             equity += pos.size * data_board.get_last_price(sym) * multiplier
             self._df_positions.loc[performance_time, sym] = pos.size * data_board.get_last_price(sym) * multiplier
 
@@ -79,6 +74,6 @@ class PerformanceManager(object):
         self._df_positions.loc[performance_time, 'total'] = self._equity[performance_time]
 
         if performance_time != current_time:     # not final day
-            self._equity[current_time] = 0.0
+            self._equity[current_time] = 0.0            # add new date
         else:  # final day, re-arrange column order
             self._df_positions = self._df_positions[self._symbols + ['cash']]

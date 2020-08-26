@@ -11,11 +11,12 @@ _logger = logging.getLogger(__name__)
 
 
 class TradeMenu(QtWidgets.QWidget):
-    def __init__(self, broker, event_engine):
+    def __init__(self, broker, event_engine, mmultiplier_dict):
         super(TradeMenu, self).__init__()
 
         self.broker = broker
         self.event_engine = event_engine
+        self.multiplier_dict = mmultiplier_dict
 
         self.init_ui()
 
@@ -25,10 +26,10 @@ class TradeMenu(QtWidgets.QWidget):
         self.resize(800, 500)
         place_order_layout = QtWidgets.QFormLayout()
         self.sym = QtWidgets.QLineEdit()
-        self.sym_name = QtWidgets.QLineEdit()
-        self.sec_type = QtWidgets.QComboBox()
-        self.sec_type.addItems(
-            ['Stock', 'Future', 'Option', 'Forex'])
+        # self.sym_name = QtWidgets.QLineEdit()
+        # self.sec_type = QtWidgets.QComboBox()
+        # self.sec_type.addItems(
+        #     ['Stock', 'Future', 'Option', 'Forex'])
         self.direction = QtWidgets.QComboBox()
         self.direction.addItems(['Long', 'Short'])
         self.order_price = QtWidgets.QLineEdit()
@@ -45,8 +46,8 @@ class TradeMenu(QtWidgets.QWidget):
 
         place_order_layout.addRow(QtWidgets.QLabel('Discretionary'))
         place_order_layout.addRow('Symbol', self.sym)
-        place_order_layout.addRow('Name', self.sym_name)
-        place_order_layout.addRow('Security_Type', self.sec_type)
+        # place_order_layout.addRow('Name', self.sym_name)
+        # place_order_layout.addRow('Security_Type', self.sec_type)
         place_order_layout.addRow('Direction', self.direction)
         place_order_layout.addRow('Price', self.order_price)
         place_order_layout.addRow('Quantity', self.order_quantity)
@@ -62,6 +63,11 @@ class TradeMenu(QtWidgets.QWidget):
         p = str(self.order_price.text())
         q = str(self.order_quantity.text())
         t = self.order_type.currentIndex()
+
+        ss = s.split(' ')
+        if ss[-1].isdigit():  # multiplier
+            s = ' '.join(ss[:-1])
+            self._multiplier_dict[s] = int(ss[-1])
 
         # to be checked by risk manger
         try:

@@ -5,6 +5,9 @@ from datetime import datetime, timedelta
 
 from .data_feed_base import DataFeedBase
 from ..data.bar_event import BarEvent
+import logging
+
+_logger = logging.getLogger(__name__)
 
 
 class LiveDataFeed(DataFeedBase):
@@ -51,7 +54,7 @@ class LiveDataFeed(DataFeedBase):
         else:
             sd = ed- timedelta(days = 365)
 
-        data = quandl.get('wiki/'+ticker, start_date=sd, end_date=ed, authtoken='ay68s2CUzKbVuy8GAqxj')
+        data = quandl.get('wiki/'+ticker, start_date=sd, end_date=ed, authtoken='your_token')
         self.tickers_data[ticker] = data
         self.tickers_data[ticker]["Ticker"] = ticker
 
@@ -101,15 +104,9 @@ class LiveDataFeed(DataFeedBase):
                 }
                 self.tickers[ticker] = ticker_prices
             except OSError:
-                print(
-                    "Could not subscribe ticker %s "
-                    "as no data CSV found for pricing." % ticker
-                )
+                _logger.error(f'Could not subscribe ticker {ticker} as no data CSV found for pricing.')
         else:
-            print(
-                "Could not subscribe ticker %s "
-                "as is already subscribed." % ticker
-            )
+            _logger.error(f"Could not subscribe ticker {ticker} as is already subscribed.")
 
     def _create_event(self, index, period, ticker, row):
         """
