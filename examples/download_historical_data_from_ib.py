@@ -13,9 +13,9 @@ import pandas as pd
 import numpy as np
 from signal import signal, SIGINT, SIG_DFL
 import pickle
-from quanttrading2.event.event import EventType
-from quanttrading2.event.live_event_engine import LiveEventEngine
-from quanttrading2.brokerage.ib_brokerage import InteractiveBrokers
+from quanttrader.event.event import EventType
+from quanttrader.event.live_event_engine import LiveEventEngine
+from quanttrader.brokerage.ib_brokerage import InteractiveBrokers
 
 signal(SIGINT, SIG_DFL)
 df = pd.DataFrame(columns=['Open', 'High', 'Low', 'Close', 'Volume'])
@@ -57,16 +57,16 @@ def run(args):
     # 7.5h x 2 = 15 requests = 15*15 ~ 4min
     symbols = [
         'ESU0 FUT GLOBEX',          # 9:30 a.m. ET on the 3rd Friday of the contract month; 15:14:30 – 15:15:00 CT; final 9:30am opening prices
-        'NQU0 FUT GLOBEX',          # 9:30 a.m. ET on the 3rd Friday of the contract month
-        'CLU0 FUT NYNEX',           # 3 business day prior to the 25th calendar day of the month prior to the contract month, if not business day; active -2D; 4:28:00 to 14:30:00 ET; 14:00:00 and 14:30:00 ET
-        'CLV0 FUT NYNEX',
-        'HOU0 FUT NYMEX',           # last business day of the month prior to the contract month; active -2D CL; 14:28:00 to 14:30:00 ET, 14:00:00 and 14:30:00 ET.
-        'HOV0 FUT NYMEX',
-        'RBU0 FUT NYMEX',           # last business day of the month prior to the contract month.; active -2D CL; 14:28:00 to 14:30:00 ET, 14:00:00 and 14:30:00 ET.
-        'RBV0 FUT NYMEX',
-        'NGU0 FUT NYMEX',         # 3rd last business days of the month prior to the contract month; active -2D. 14:28:00 to 14:30:00 ET; 14:00:00 and 14:30:00 ET
-        'NGV0 FUT NYMEX',
-        # 'SPY STK SMART',
+        # 'NQU0 FUT GLOBEX',          # 9:30 a.m. ET on the 3rd Friday of the contract month
+        # 'CLU0 FUT NYNEX',           # 3 business day prior to the 25th calendar day of the month prior to the contract month, if not business day; active -2D; 4:28:00 to 14:30:00 ET; 14:00:00 and 14:30:00 ET
+        # 'CLV0 FUT NYNEX',
+        # 'HOU0 FUT NYMEX',           # last business day of the month prior to the contract month; active -2D CL; 14:28:00 to 14:30:00 ET, 14:00:00 and 14:30:00 ET.
+        # 'HOV0 FUT NYMEX',
+        # 'RBU0 FUT NYMEX',           # last business day of the month prior to the contract month.; active -2D CL; 14:28:00 to 14:30:00 ET, 14:00:00 and 14:30:00 ET.
+        # 'RBV0 FUT NYMEX',
+        # 'NGU0 FUT NYMEX',         # 3rd last business days of the month prior to the contract month; active -2D. 14:28:00 to 14:30:00 ET; 14:00:00 and 14:30:00 ET
+        # 'NGV0 FUT NYMEX',
+        # # 'SPY STK SMART',
         # 'QQQ STK SMART',
         # 'XLE STK SMART',
         # 'XLF STK SMART',

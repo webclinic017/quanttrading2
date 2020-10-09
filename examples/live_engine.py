@@ -7,7 +7,7 @@ import importlib
 from datetime import datetime
 import yaml
 from PyQt5 import QtCore, QtWidgets, QtGui
-from quanttrading2.gui.ui_main_window import MainWindow
+from quanttrader.gui.ui_main_window import MainWindow
 import atexit
 from signal import signal, SIGINT, SIG_DFL
 from os import kill
@@ -18,10 +18,9 @@ import logging
 signal(SIGINT, SIG_DFL)
 
 
-def main(config_file):
-    config = None
+def main(config_file, instrument_meta_file):
+    config = {}
     today =  datetime.today().strftime('%Y%m%d')
-    strategy_dict = {}
     try:
         # path = os.path.abspath(os.path.dirname(__file__))
         # config_file = os.path.join(path, 'config.yaml')
@@ -29,13 +28,21 @@ def main(config_file):
             config = yaml.safe_load(fd)
     except IOError:
         print("config.yaml is missing")
+    config['root_path'] = os.getcwd()
+
+    instrument_meta = {}
+    try:
+        with open(instrument_meta_file, encoding='utf8') as fd:
+            instrument_meta = yaml.safe_load(fd)
+    except IOError:
+        pass
 
     required_dirs = ['./log/', './tick/', './strategy/']
     for d in required_dirs:
         if not os.path.exists(d):
             os.makedirs(d)
 
-    _logger = logging.getLogger('quanttrading2')
+    _logger = logging.getLogger('quanttrader')
     _logger.setLevel(logging.DEBUG)
     handler1 = logging.StreamHandler()
     handler2 = logging.FileHandler(f"./log/{today}.log")
@@ -70,13 +77,14 @@ def main(config_file):
                         if ('Strategy' in k) and ('Abstract' not in k) and (k in config['strategy']):
                             v = module.__getattribute__(k)
                             _strategy = v()
+                            _strategy.set_name(k)
                             strategy_dict[k] = _strategy
                 except Exception as e:
                     _logger2.error(f'Unable to load strategy {s}: {str(e)}')
 
     app = QtWidgets.QApplication(sys.argv)
     app.setWindowIcon(QtGui.QIcon("gui/image/logo.ico"))
-    mainWindow = MainWindow(config, strategy_dict)
+    mainWindow = MainWindow(config, instrument_meta, strategy_dict)
 
     if config['theme'] == 'dark':
         import qdarkstyle
@@ -89,6 +97,7 @@ def main(config_file):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Live Engine')
     parser.add_argument('-f', '--config_file', dest = 'config_file', default='./config_live.yaml', help='config yaml file')
+    parser.add_argument('-m', '--instrument_meta', dest='instrument_meta', default='./instrument_meta.yaml', help='instrument meta file')
     args = parser.parse_args()
 
-    main(args.config_file)
+    main(args.config_file, args.instrument_meta)

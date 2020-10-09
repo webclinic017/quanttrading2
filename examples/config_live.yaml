@@ -1,27 +1,53 @@
 account: LU1832
-theme: dark           # white, dark
-host: '127.0.0.1'
-port: 7497
 client_id: 0
-
-#-------------- active strategies -------------#
+host: 127.0.0.1
+port: 7497
 strategy:
-  MovingAverageCrossStrategy:
-    active: False
+  DoubleMovingAverageCrossStrategy:
+    active: false
+    capital: 10000
+    params:
+      n_fast_ma: 20
+      n_slow_ma: 200
+    symbols:
+    - NGX0 FUT NYMEX
+  DualThrustStrategy:
+    active: false
     capital: 10000
     params:
       G: 20
     symbols:
-      - CLV0 FUT NYMEX 1000
-  OrderPerIntervalStrategy:
-    active: False
-    capital: 50000
+    - MESZ0 FUT GLOBEX
+  MovingAverageCrossStrategy:
+    active: false
+    capital: 10000
     params:
-      tick_trigger_threshold: 500
+      G: 20
     symbols:
-      #- SPY STK SMART
-      #- AAPL STK SMART
-      #- AMZN STK SMART
-      - ESU0 FUT GLOBEX 50
-      #- CLV0 FUT NYMEX 1000
-      #- NGV0 FUT NYMEX 10000
+    - CLX0 FUT NYMEX
+  ActiveBuySellStrengthStrategy:
+    active: false
+    capital: 10000
+    params:
+      strength_abs_threshold: 200
+    symbols:
+      - NQZ0 FUT GLOBEX
+  OrderPerIntervalStrategy:
+    active: false
+    capital: 50000
+    order_end_time: 57000
+    order_start_time: 09:40:00
+    params:
+      tick_trigger_threshold: 6000
+    single_trade_limit: 3
+    symbols:
+    - ESZ0 FUT GLOBEX
+    total_active_limit: 2
+    total_cancel_limit: 5
+    total_loss_limit: 500
+    total_trade_limit: 15
+theme: dark
+total_active_limit: 3
+total_cancel_limit: 10
+total_loss_limit: 5000
+total_trade_limit: 20

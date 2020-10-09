@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-from quanttrading2.strategy.strategy_base import StrategyBase
-from quanttrading2.data.tick_event import TickType
-from quanttrading2.order.order_event import OrderEvent
-from quanttrading2.order.order_status import OrderStatus
-from quanttrading2.order.order_type import OrderType
+from quanttrader.strategy.strategy_base import StrategyBase
+from quanttrader.data.tick_event import TickType
+from quanttrader.order.order_event import OrderEvent
+from quanttrader.order.order_status import OrderStatus
+from quanttrader.order.order_type import OrderType
 import numpy as np
 import logging
 
@@ -55,7 +55,9 @@ class MovingAverageCrossStrategy(StrategyBase):
                 # check standing orders; if it is also a buy order, do nothing
                 # elif it is a sell order; cancel the order
                 # TODO it's possible that order fails to be placed due to connection issue; and order status is kept as acknowledged
+                # TODO it's possible that IB side failed to recoginize the order:  Error. id: 14071, Code: 200, Msg: No security definition has been found for the request (valid security, later another order accepted)
                 # TODO it's also possible to cancel a partially filled order
+                # TODO: also see cancel placed on 10:07:21.771; openorder pending cancel on 10:07:21.918; execDetails filled on 10:07:21.958; orderstatus filled on 10:07:21.992; error message cancel rejected on 10:07:22.112
                 standing_oids = self._order_manager.retrieve_standing_orders()
                 if len(standing_oids) > 0:
                     _logger.info(f"MovingAverageCrossStrategy standing orders: {','.join(map(str, standing_oids))}")
