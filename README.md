@@ -1,4 +1,7 @@
 # quanttrader
+[![pypi](https://img.shields.io/pypi/v/nseazy.svg)](https://pypi.python.org/pypi/quanttrader)
+[![python](https://img.shields.io/pypi/pyversions/nseazy.svg)](https://pypi.python.org/pypi/quanttrader)
+[![License Apache 2.0](https://badgen.net/badge/license/apache2.0/blue)](https://opensource.org/licenses/MIT)
 
 Welcome to quanttrader, a pure python-based event-driven backtest and live trading package for quant traders.
 
@@ -11,6 +14,8 @@ In most cases, a backtest strategy can be directly used for live trade by simply
 [Backtest code structure](https://letianzj.github.io/quanttrading-backtest.html)
 
 [Backtests examples](https://github.com/letianzj/QuantResearch/tree/master/backtest)
+
+[Reinforcement trader](https://github.com/letianzj/QuantResearch/blob/master/ml/reinforcement_trader.ipynb)
 
 ### Live trading
 
